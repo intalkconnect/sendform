@@ -24,6 +24,7 @@ if (!FRESHDESK_DOMAIN || !FRESHDESK_API_KEY) {
 const toArray = v => (v == null ? [] : Array.isArray(v) ? v : [v]);
 
 // Rota: recebe o formulário e cria ticket no Freshdesk
+// server.js (trecho da rota)
 app.post('/api/agendar-demo', async (req, res) => {
   const {
     website, // honeypot
@@ -31,71 +32,50 @@ app.post('/api/agendar-demo', async (req, res) => {
     mensagem, origem, canal, consentimento
   } = req.body;
 
-  // Anti-spam (honeypot preenchido)
-  if (website && website.trim() !== '') return res.status(204).end();
+  if (website && website.trim() !== '') return res.status(204).end(); // anti-spam
+  if (!empresa || !email) return res.status(400).json({ error: 'missing_fields' });
 
-  // Campos obrigatórios
-  if (!nome || !empresa || !email || !telefone || !tamanho)
-    return res.status(400).json({ error: 'missing_fields' });
-
-  // Consentimento obrigatório
-  if (!consentimento)
-    return res.status(400).json({ error: 'consent_required' });
-
+  // interesses pode vir como "interesse" ou "interesse[]"
+  const toArray = v => (v == null ? [] : Array.isArray(v) ? v : [v]);
   const interesses = toArray(req.body['interesse[]'] || req.body.interesse);
 
-  const subject = `Agendar contato comercial — ${empresa} (${nome})`;
-  const description =
-`**Origem:** ${origem || 'Site - Agendar Demo'}
-**Canal:** ${canal || 'Web'}
-**Solicitante:** ${nome}
-**E-mail:** ${email}
-**Telefone:** ${telefone}
-**Empresa:** ${empresa}
-**Tamanho:** ${tamanho}
-**Interesse(s):** ${interesses.join(', ') || '—'}
+  // Subject fixo + nome da empresa
+  const subject = `Comercial LP - ${empresa}`;
 
-**Contexto**
+  // Tudo o restante no corpo do ticket
+  const description =
+`**Solicitante:** ${nome || '—'}
+**Empresa:** ${empresa}
+**E-mail:** ${email}
+**Telefone:** ${telefone || '—'}
+**Tamanho:** ${tamanho || '—'}
+**Interesse(s):** ${interesses.join(', ') || '—'}
+**Origem:** ${origem || '—'}
+**Canal:** ${canal || '—'}
+**Consentimento LGPD:** ${consentimento ? 'sim' : 'não'}
+
+**Mensagem**
 ${mensagem || '—'}`;
 
-  const tags = ['site', 'agendar-demo', ...interesses.map(i => i.toLowerCase().replace(/\s+/g,'-'))];
-
-  // Ajuste os names para os seus campos personalizados no Freshdesk (Admin > Ticket Fields)
-  const custom_fields = {
-    cf_company_size: tamanho,
-    cf_channel: canal || 'Web',
-    cf_origin: origem || 'Site - Agendar Demo',
-    cf_consent: true
-  };
-
   try {
-    const url = `https://${FRESHDESK_DOMAIN}.freshdesk.com/api/v2/tickets`;
-    const auth = Buffer.from(`${FRESHDESK_API_KEY}:X`).toString('base64');
+    const url = `https://${process.env.FRESHDESK_DOMAIN}.freshdesk.com/api/v2/tickets`;
+    const auth = Buffer.from(`${process.env.FRESHDESK_API_KEY}:X`).toString('base64');
 
-    await axios.post(
-      url,
-      {
-        email,
-        name: nome,
-        phone: telefone,
-        subject,
-        description,
-        priority: 2,
-        status: 2,
-        tags,
-        custom_fields
-      },
-      {
-        headers: {
-          Authorization: `Basic ${auth}`,
-          'Content-Type': 'application/json'
-        },
-        timeout: 15000
-      }
-    );
+    await axios.post(url, {
+      email,                         // do form
+      phone: telefone || undefined,  // do form
+      subject,                       // fixo + empresa
+      description,                   // resto dos campos
+      priority: 2,                   // (opcional) ajuste se quiser
+      status: 2,                     // (opcional) Open
+      // sem custom_fields, sem group/agent
+      tags: ['lp', 'comercial']      // (opcional) remova se não quiser
+    }, {
+      headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/json' },
+      timeout: 15000
+    });
 
-    // Sucesso: não devolve página nem corpo
-    return res.status(204).end();
+    return res.status(204).end(); // sucesso: não devolve página nem JSON
   } catch (err) {
     const status = err.response?.status || 500;
     return res.status(status).json({
