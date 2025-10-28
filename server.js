@@ -1,13 +1,9 @@
-// server.js
+// server.js (sem dependência de express-rate-limit)
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
-import rateLimit from "express-rate-limit";
 
-// ==== ENV ====
-// defina no Railway:
-// FRESHDESK_DOMAIN=seu-dominio (sem https)
-// FRESHDESK_API_KEY=xxxxxxxx
+// ===== ENV =====
 const {
   FRESHDESK_DOMAIN,
   FRESHDESK_API_KEY,
@@ -30,6 +26,7 @@ const ALLOWED = [
   "http://localhost:5173",
   "http://localhost:3000",
 ];
+
 app.use(
   cors({
     origin: (origin, cb) => {
@@ -38,31 +35,46 @@ app.use(
     },
     methods: ["POST", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Accept"],
+    maxAge: 600,
   })
 );
 
-// Aceita application/x-www-form-urlencoded e JSON
+// Trata preflight rapidamente
+app.options("/api/*", (req, res) => res.sendStatus(204));
+
+// Aceita x-www-form-urlencoded e JSON
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
-// Rate limit
-app.use(
-  "/api/",
-  rateLimit({ windowMs: 60 * 1000, max: 20, standardHeaders: true, legacyHeaders: false })
-);
+// ===== Limitador simples por IP (janela 60s, até 20 req) =====
+const hits = new Map(); // ip -> { count, ts }
+const WINDOW_MS = 60_000;
+const MAX_REQ = 20;
 
-// ===== Util =====
+app.use("/api/", (req, res, next) => {
+  const ip = req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.ip || "local";
+  const now = Date.now();
+  const item = hits.get(ip);
+
+  if (!item || now - item.ts > WINDOW_MS) {
+    hits.set(ip, { count: 1, ts: now });
+    return next();
+  }
+
+  if (item.count >= MAX_REQ) {
+    res.set("Retry-After", Math.ceil((item.ts + WINDOW_MS - now) / 1000));
+    return res.status(429).json({ error: "rate_limited" });
+  }
+
+  item.count++;
+  next();
+});
+
+// ===== Utils =====
 const b64 = (str) => Buffer.from(str, "utf8").toString("base64");
-
-// Normaliza texto simples
 const norm = (v) => (typeof v === "string" ? v.trim() : "");
-
-// Monta HTML seguro simples
 const esc = (s) =>
-  norm(s)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+  norm(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 // ===== Endpoint =====
 app.post("/api/agendar-demo", async (req, res) => {
@@ -80,22 +92,21 @@ app.post("/api/agendar-demo", async (req, res) => {
       consentimento,
     } = req.body;
 
-    // checkboxes interesse[] podem vir como array ou string
+    // interesse[] pode vir como array ou string
     let interesse = req.body["interesse[]"] ?? req.body.interesse ?? [];
     if (!Array.isArray(interesse)) interesse = [interesse];
     interesse = interesse.filter(Boolean).map(String);
 
-    // Honeypot: se preenchido, descarta
+    // Honeypot
     if (norm(website)) return res.status(204).end();
 
-    const requesterName = norm(nome) || "Contato do site";
-    const companyName   = norm(empresa) || "Empresa não informada";
+    const requesterName  = norm(nome) || "Contato do site";
+    const companyName    = norm(empresa) || "Empresa não informada";
     const requesterEmail = norm(email);
-    const phone = norm(telefone);
+    const phone          = norm(telefone);
+    const subject        = `Comercial LP - ${companyName}`;
 
-    const subject = `Comercial LP - ${companyName}`;
-
-    // Corpo bonito em HTML
+    // Corpo HTML bonitinho
     const html = `
       <div style="font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;font-size:14px;line-height:1.5;color:#0B1220">
         <h2 style="margin:0 0 6px 0;font-size:18px">Novo contato comercial via Landing Page</h2>
@@ -112,26 +123,23 @@ app.post("/api/agendar-demo", async (req, res) => {
           <li><b>Consentimento LGPD:</b> ${consentimento ? "sim" : "não"}</li>
         </ul>
         ${norm(mensagem)
-          ? `<div style="margin-top:8px"><b>Observações:</b><br><div style="white-space:pre-line">${esc(
-              mensagem
-            )}</div></div>`
+          ? `<div style="margin-top:8px"><b>Observações:</b><br><div style="white-space:pre-line">${esc(mensagem)}</div></div>`
           : ""}
       </div>
     `;
 
-    // Monta payload Freshdesk
+    // Payload Freshdesk
     const ticket = {
-      email: requesterEmail || undefined,  // se vazio, freshdesk cria "sem email"
-      name: requesterName,                 // <-- AGORA vai o NOME aqui
-      phone: phone || undefined,           // telefone correto
+      email: requesterEmail || undefined,
+      name: requesterName,     // << nome correto aqui
+      phone: phone || undefined,
       subject,
-      status: 2,                           // Open
-      priority: 2,                         // Medium
-      source: 2,                           // Portal (pode usar 2/3 conforme sua preferência)
-      description: html,                   // Freshdesk aceita HTML neste campo
+      status: 2,               // Open
+      priority: 2,             // Medium
+      source: 2,               // Portal (ajuste se quiser)
+      description: html,       // HTML aceito
     };
 
-    // Chama Freshdesk
     const resp = await fetch(`https://${FRESHDESK_DOMAIN}.freshdesk.com/api/v2/tickets`, {
       method: "POST",
       headers: {
@@ -142,12 +150,11 @@ app.post("/api/agendar-demo", async (req, res) => {
     });
 
     if (!resp.ok) {
-      let details = "";
-      try { details = await resp.text(); } catch (_) {}
+      const details = await resp.text().catch(() => "");
       return res.status(resp.status).json({ error: "freshdesk_error", details });
     }
 
-    // Sem corpo: 204 para o frontend abrir o modal de sucesso
+    // Resposta vazia para o front abrir o modal de sucesso
     return res.status(204).end();
   } catch (err) {
     console.error(err);
