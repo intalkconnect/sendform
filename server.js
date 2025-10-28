@@ -142,7 +142,7 @@ app.post("/api/agendar-demo", async (req, res) => {
     const companyName    = norm(empresa) || "Empresa não informada";
     const requesterEmail = norm(email);
     const phone          = norm(telefone);
-    const subject        = `Comercial LP - ${companyName}`;
+    const subject        = `Comercial - ${requesterName} | ${companyName}`;
 
     // garante contato com "name" correto
     const contact = await upsertContact({
@@ -153,17 +153,15 @@ app.post("/api/agendar-demo", async (req, res) => {
 
     const html = `
       <div style="font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;font-size:14px;line-height:1.5;color:#0B1220">
-        <h2 style="margin:0 0 6px 0;font-size:18px">Novo contato comercial via Landing Page</h2>
-        <p style="margin:0 0 12px;color:#4B5563">Criado automaticamente pela integração do site.</p>
-        <ul style="padding-left:18px;margin:0 0 12px">
+        <h2 style="margin:0 0 6px 0;font-size:18px">Novo contato comercial</h2>
+         <ul style="padding-left:18px;margin:0 0 12px">
           <li><b>Solicitante:</b> ${esc(requesterName)}</li>
           <li><b>Empresa:</b> ${esc(companyName)}</li>
           <li><b>E-mail:</b> ${esc(requesterEmail)}</li>
           <li><b>Telefone:</b> ${esc(phone)}</li>
           <li><b>Tamanho:</b> ${esc(tamanho)}</li>
           <li><b>Interesse(s):</b> ${interesse.map(esc).join(", ") || "—"}</li>
-          <li><b>Origem:</b> ${esc(origem || "Site - Agendar Demo")}</li>
-          <li><b>Canal:</b> ${esc(canal || "Web")}</li>
+          <li><b>Origem:</b> ${esc(origem || "LP")}</li>
           <li><b>Consentimento LGPD:</b> ${consentimento ? "sim" : "não"}</li>
         </ul>
         ${norm(mensagem)
