@@ -197,5 +197,92 @@ app.post("/api/agendar-demo", async (req, res) => {
   }
 });
 
+// Adicione isto ao seu server.js (onde já existe upsertContact e utilitários):
+
+app.post("/api/incidente", async (req, res) => {
+  try {
+    const {
+      website, nome, email, telefone, empresa,
+      servico, severidade, impacto, inicio, ambiente,
+      resumo, descricao, evidencias,
+      origem, canal, consentimento
+    } = req.body;
+
+    // honeypot
+    if ((website || "").trim()) return res.status(204).end();
+
+    // contato
+    const contact = await upsertContact({
+      name: (nome || "").trim() || "Contato do site",
+      email: (email || "").trim(),
+      phone: (telefone || "").trim(),
+    });
+
+    // prioridade por severidade
+    const sev = (severidade || "").toLowerCase();
+    const priority =
+      sev.includes("crít") ? 4 :
+      sev.includes("alta") ? 3 :
+      sev.includes("méd") ? 2 : 1;
+
+    // assunto
+    const subject = `Incidente - ${resumo || servico || "Sem título"}${empresa ? " - " + empresa : ""}`;
+
+    // corpo HTML
+    const esc = (s)=> String(s||"").trim()
+      .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+    const html = `
+      <div style="font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;font-size:14px;line-height:1.5;color:#0B1220">
+        <h2 style="margin:0 0 6px 0;font-size:18px">Incidente reportado</h2>
+        <p style="margin:0 0 12px;color:#4B5563">Criado automaticamente pelo formulário de incidentes.</p>
+        <ul style="padding-left:18px;margin:0 0 12px">
+          <li><b>Solicitante:</b> ${esc(nome)}</li>
+          <li><b>Empresa:</b> ${esc(empresa)}</li>
+          <li><b>E-mail:</b> ${esc(email)}</li>
+          <li><b>Telefone:</b> ${esc(telefone)}</li>
+          <li><b>Serviço afetado:</b> ${esc(servico)}</li>
+          <li><b>Severidade:</b> ${esc(severidade)}</li>
+          <li><b>Impacto:</b> ${esc(impacto)}</li>
+          <li><b>Início:</b> ${esc(inicio)}</li>
+          <li><b>Ambiente:</b> ${esc(ambiente)}</li>
+          <li><b>Origem:</b> ${esc(origem || "Site - Abrir Incidente")}</li>
+          <li><b>Canal:</b> ${esc(canal || "Web")}</li>
+          <li><b>Consentimento LGPD:</b> ${consentimento ? "sim" : "não"}</li>
+        </ul>
+        <div style="margin-top:8px"><b>Descrição detalhada:</b><br><div style="white-space:pre-line">${esc(descricao)}</div></div>
+        ${evidencias ? `<div style="margin-top:8px"><b>Evidências:</b><br><div style="white-space:pre-line">${esc(evidencias)}</div></div>` : ""}
+      </div>
+    `;
+
+    const ticket = {
+      requester_id: contact.id,
+      subject,
+      status: 2,            // Open
+      priority,             // 1..4
+      source: 2,            // Portal
+      type: "Incident",     // tipifica
+      tags: ["incidente", (servico||"").toLowerCase().replace(/\s+/g,'-')],
+      description: html
+    };
+
+    const r = await fd(`/api/v2/tickets`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(ticket),
+    });
+
+    if (!r.ok) {
+      const details = await r.text().catch(() => "");
+      return res.status(r.status).json({ error: "freshdesk_error", details });
+    }
+
+    return res.status(204).end();
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: "server_error" });
+  }
+});
+
+
 app.get("/", (_req, res) => res.type("text").send("OK"));
 app.listen(PORT, () => console.log(`API on http://0.0.0.0:${PORT}`));
